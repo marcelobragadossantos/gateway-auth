@@ -84,6 +84,10 @@ function validateSignature(
     };
   }
 
+  // Strict numeric format — match Python int() behavior, not parseInt's permissive trailing-junk acceptance.
+  if (!/^\d+$/.test(tsRaw)) {
+    return { reason: 'invalid_timestamp', detail: { raw: tsRaw } };
+  }
   const timestamp = Number.parseInt(tsRaw, 10);
   if (!Number.isInteger(timestamp)) {
     return { reason: 'invalid_timestamp', detail: { raw: tsRaw } };
@@ -131,8 +135,15 @@ export function gatewayAuthMiddleware(
       `gatewayAuthMiddleware: invalid mode '${mode}' (expected off|warn|enforce)`,
     );
   }
-  if (mode !== 'off' && (!opts.pubkeyHex || typeof opts.pubkeyHex !== 'string')) {
-    throw new Error('gatewayAuthMiddleware: pubkeyHex is required for warn|enforce');
+  if (mode !== 'off') {
+    if (!opts.pubkeyHex || typeof opts.pubkeyHex !== 'string') {
+      throw new Error('gatewayAuthMiddleware: pubkeyHex is required for warn|enforce');
+    }
+    if (!/^[0-9a-f]{64}$/i.test(opts.pubkeyHex)) {
+      throw new Error(
+        'gatewayAuthMiddleware: pubkeyHex must be 64 hex chars (32-byte Ed25519 public key)',
+      );
+    }
   }
 
   const ctx: ValidationContext = {
@@ -169,11 +180,10 @@ export function gatewayAuthMiddleware(
       return;
     }
 
-    // enforce
-    if (failure.reason === 'missing_raw_body') {
-      res.status(401).json({ error: 'missing_raw_body' });
-      return;
-    }
-    res.status(401).json({ error: 'invalid_gateway_signature' });
+    // enforce: uniform error shape across all failure reasons (matches Python middleware).
+    res.status(401).json({
+      error: 'invalid_gateway_signature',
+      reason: failure.reason,
+    });
   };
 }

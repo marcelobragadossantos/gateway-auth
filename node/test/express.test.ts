@@ -114,7 +114,10 @@ describe('gatewayAuthMiddleware - mode=enforce', () => {
     mw(buildReq(), res, next as NextFunction);
     expect(next).not.toHaveBeenCalled();
     expect(status).toHaveBeenCalledWith(401);
-    expect(json).toHaveBeenCalledWith({ error: 'missing_raw_body' });
+    expect(json).toHaveBeenCalledWith({
+      error: 'invalid_gateway_signature',
+      reason: 'missing_raw_body',
+    });
   });
 
   it('rejects with 401 on tampered body', () => {
@@ -139,7 +142,10 @@ describe('gatewayAuthMiddleware - mode=enforce', () => {
     mw(buildReq({ headers, rawBody: tampered }), res, next as NextFunction);
     expect(next).not.toHaveBeenCalled();
     expect(status).toHaveBeenCalledWith(401);
-    expect(json).toHaveBeenCalledWith({ error: 'invalid_gateway_signature' });
+    expect(json).toHaveBeenCalledWith({
+      error: 'invalid_gateway_signature',
+      reason: 'invalid_signature',
+    });
   });
 
   it('rejects when timestamp is outside the window', () => {
@@ -174,7 +180,10 @@ describe('gatewayAuthMiddleware - mode=enforce', () => {
     );
     expect(next).not.toHaveBeenCalled();
     expect(status).toHaveBeenCalledWith(401);
-    expect(json).toHaveBeenCalledWith({ error: 'invalid_gateway_signature' });
+    expect(json).toHaveBeenCalledWith({
+      error: 'invalid_gateway_signature',
+      reason: 'timestamp_outside_window',
+    });
   });
 
   it('rejects when gateway headers are missing', () => {
@@ -189,7 +198,39 @@ describe('gatewayAuthMiddleware - mode=enforce', () => {
     mw(buildReq({ rawBody: body }), res, next as NextFunction);
     expect(next).not.toHaveBeenCalled();
     expect(status).toHaveBeenCalledWith(401);
-    expect(json).toHaveBeenCalledWith({ error: 'invalid_gateway_signature' });
+    expect(json).toHaveBeenCalledWith({
+      error: 'invalid_gateway_signature',
+      reason: 'missing_gateway_headers',
+    });
+  });
+
+  it('rejects when timestamp has trailing junk (parseInt would accept)', () => {
+    const body = Buffer.alloc(0);
+    const mw = gatewayAuthMiddleware({
+      pubkeyHex: pubkey_hex,
+      mode: 'enforce',
+      now: freshNow,
+    });
+    const next = vi.fn();
+    const { res, status, json } = buildRes();
+    mw(
+      buildReq({
+        rawBody: body,
+        headers: {
+          'x-gateway-user-id': '42',
+          'x-gateway-timestamp': '1748390401abc',
+          'x-gateway-signature': 'aa'.repeat(64),
+        },
+      }),
+      res,
+      next as NextFunction,
+    );
+    expect(next).not.toHaveBeenCalled();
+    expect(status).toHaveBeenCalledWith(401);
+    expect(json).toHaveBeenCalledWith({
+      error: 'invalid_gateway_signature',
+      reason: 'invalid_timestamp',
+    });
   });
 });
 
@@ -278,6 +319,18 @@ describe('gatewayAuthMiddleware - construction', () => {
     expect(() =>
       gatewayAuthMiddleware({ pubkeyHex: '', mode: 'enforce' }),
     ).toThrow();
+  });
+
+  it('throws when pubkeyHex is the wrong length', () => {
+    expect(() =>
+      gatewayAuthMiddleware({ pubkeyHex: 'aabb', mode: 'enforce' }),
+    ).toThrow(/64 hex chars/);
+  });
+
+  it('throws when pubkeyHex contains non-hex chars', () => {
+    expect(() =>
+      gatewayAuthMiddleware({ pubkeyHex: 'zz'.repeat(32), mode: 'warn' }),
+    ).toThrow(/64 hex chars/);
   });
 
   it('off mode does not require pubkey', () => {
@@ -377,7 +430,10 @@ describe('integration with real Express app', () => {
       });
       expect(resp.status).toBe(401);
       const json = await resp.json();
-      expect(json).toEqual({ error: 'invalid_gateway_signature' });
+      expect(json).toEqual({
+        error: 'invalid_gateway_signature',
+        reason: 'invalid_signature',
+      });
     } finally {
       server.close();
     }

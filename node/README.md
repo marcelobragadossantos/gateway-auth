@@ -109,9 +109,9 @@ interface ExpressMiddlewareOptions {
 |---|---|
 | `off` | Passa direto. Útil pra primeiro deploy só pra confirmar que sobe limpo. |
 | `warn` | Valida. Em falha, `logger.warn(...)` e segue (`next()`). Observação de 48h sem quebrar tráfego. |
-| `enforce` | Valida. Em falha -> `401 { error: 'invalid_gateway_signature' }`. Falta de `req.rawBody` -> `401 { error: 'missing_raw_body' }`. |
+| `enforce` | Valida. Em qualquer falha -> `401 { error: 'invalid_gateway_signature', reason: '<motivo>' }` (shape uniforme com a lib Python). `reason` ∈ `missing_raw_body | missing_gateway_headers | invalid_timestamp | timestamp_outside_window | invalid_signature`. |
 
-`mode=off` ignora `pubkeyHex` (pode passar string vazia). `mode=warn|enforce` exige `pubkeyHex`.
+`mode=off` ignora `pubkeyHex` (pode passar string vazia). `mode=warn|enforce` exige `pubkeyHex` válido — **64 chars hex** (32 bytes Ed25519 pubkey). Comprimento/encoding errado faz o construtor lançar imediatamente (em vez de virar 401 silencioso em runtime).
 
 Rollback de produção: `GATEWAY_AUTH_MODE=warn` ou `off`, restart do container (~10s).
 
