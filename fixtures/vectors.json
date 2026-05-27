@@ -1,0 +1,55 @@
+{
+  "version": "1",
+  "algorithm": "Ed25519",
+  "encoding": "hex-lowercase",
+  "test_keys": {
+    "_warning": "TEST KEYS ONLY. Nunca usar em producao. Para producao, gerar par novo (ver README).",
+    "privkey_hex": "9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60",
+    "pubkey_hex": "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a"
+  },
+  "canonical_payload_format": "METHOD\\nPATH\\nUID\\nUNIX_TIMESTAMP_S\\nsha256:HEX_BODY_HASH",
+  "cases": [
+    {
+      "name": "get_no_body",
+      "description": "GET sem body. Body hash = SHA-256 de string vazia.",
+      "input": {
+        "method": "GET",
+        "path": "/v1/users/me",
+        "uid": "42",
+        "timestamp": 1748390400,
+        "body_hex": ""
+      },
+      "canonical_payload_utf8": "GET\n/v1/users/me\n42\n1748390400\nsha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "canonical_payload_hex": "4745540a2f76312f75736572732f6d650a34320a313734383339303430300a7368613235363a65336230633434323938666331633134396166626634633839393666623932343237616534316534363439623933346361343935393931623738353262383535",
+      "expected_signature_hex": "75ab73385e03aaf34f12349124abb9d1e3607c6dfc737453ecacb370ddb3fe65a97314fd2cf88a86ecc6ecb32a10eb691f0f4b7af007716627c47e93eb1e6205"
+    },
+    {
+      "name": "post_json_body",
+      "description": "POST com body JSON. Body bytes sao os exatos enviados ao back.",
+      "input": {
+        "method": "POST",
+        "path": "/v1/orders",
+        "uid": "42",
+        "timestamp": 1748390401,
+        "body_hex": "7b22736b75223a22414243313233222c22717479223a327d"
+      },
+      "canonical_payload_utf8": "POST\n/v1/orders\n42\n1748390401\nsha256:ac8a68571acc0d11bd36502a3ffa8ca452978835d1fb8a3979ea5bbf89614585",
+      "canonical_payload_hex": "504f53540a2f76312f6f72646572730a34320a313734383339303430310a7368613235363a61633861363835373161636330643131626433363530326133666661386361343532393738383335643166623861333937396561356262663839363134353835",
+      "expected_signature_hex": "4551458409f3e799cfcdcb5e51267b02909841ad908dc5c46fd2dc357dffecb184144f82be065b723a41b7ca8a89f87c1620b435ac0c3d1d7e3d27fd209d670a"
+    },
+    {
+      "name": "put_after_api_strip",
+      "description": "PUT em path APOS o strip de /api do Express front. Demonstra que path canonico = path que chega no back final.",
+      "input": {
+        "method": "PUT",
+        "path": "/relatorios/2026-05",
+        "uid": "9",
+        "timestamp": 1748390402,
+        "body_hex": "7b22737461747573223a22636c6f736564227d"
+      },
+      "canonical_payload_utf8": "PUT\n/relatorios/2026-05\n9\n1748390402\nsha256:ed47da645d3cddf1304a1b16bff154fa3c5a7a41af83c72e825d2e04c9bf2a56",
+      "canonical_payload_hex": "5055540a2f72656c61746f72696f732f323032362d30350a390a313734383339303430320a7368613235363a65643437646136343564336364646631333034613162313662666631353466613363356137613431616638336337326538323564326530346339626632613536",
+      "expected_signature_hex": "95683e2f98c205d22f735de259a1c034d37874c1b4c2b21413f0f01ff2b81abd0c8ff936979685cc69186822de4713b543e0c27e7cca39dff5898ef3f36e3b01"
+    }
+  ]
+}
