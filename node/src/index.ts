@@ -117,28 +117,40 @@ export function sign(privkeyHex: string, input: CanonicalInput): string {
 }
 
 /**
- * Verify a signature for the canonical payload built from `input`.
+ * Parse a 32-byte Ed25519 public key from hex. Use this once at startup
+ * (e.g. in a middleware constructor) and pass the result to `verifyWithPubkey`
+ * on every request — avoids re-parsing hex on each verification.
  *
- * Returns true on valid signature, false otherwise. Never throws on a bad
- * signature/key shape — only on invalid input (missing method/path/uid).
- *
- * @param pubkeyHex 32-byte Ed25519 public key, hex lowercase.
- * @param signatureHex 64-byte Ed25519 signature, hex lowercase.
+ * Throws GatewayAuthError if the hex is malformed or not 32 bytes.
  */
-export function verify(
-  pubkeyHex: string,
+export function parsePubkey(pubkeyHex: string): Uint8Array {
+  const pub = hexToBytes(pubkeyHex, 'pubkey');
+  if (pub.length !== 32) {
+    throw new GatewayAuthError(
+      'invalid_key',
+      `pubkey must be 32 bytes (got ${pub.length})`,
+    );
+  }
+  return pub;
+}
+
+/**
+ * Verify with a pre-parsed pubkey. Hot-path variant — `parsePubkey` once at
+ * startup, then call this per request. Equivalent to `verify(pubkeyHex, ...)`
+ * minus the per-call hex parse.
+ */
+export function verifyWithPubkey(
+  pubkey: Uint8Array,
   signatureHex: string,
   input: CanonicalInput,
 ): boolean {
-  let pub: Uint8Array;
   let sig: Uint8Array;
   try {
-    pub = hexToBytes(pubkeyHex, 'pubkey');
     sig = hexToBytes(signatureHex, 'signature');
   } catch {
     return false;
   }
-  if (pub.length !== 32 || sig.length !== 64) return false;
+  if (pubkey.length !== 32 || sig.length !== 64) return false;
 
   let payload: Buffer;
   try {
@@ -149,8 +161,35 @@ export function verify(
   }
 
   try {
-    return ed.verify(sig, payload, pub);
+    return ed.verify(sig, payload, pubkey);
   } catch {
     return false;
   }
+}
+
+/**
+ * Verify a signature for the canonical payload built from `input`.
+ *
+ * Returns true on valid signature, false otherwise. Never throws on a bad
+ * signature/key shape — only on invalid input (missing method/path/uid).
+ *
+ * For hot paths (HTTP middleware), prefer `parsePubkey` once + `verifyWithPubkey`
+ * per request to avoid re-parsing pubkey hex on every call.
+ *
+ * @param pubkeyHex 32-byte Ed25519 public key, hex lowercase.
+ * @param signatureHex 64-byte Ed25519 signature, hex lowercase.
+ */
+export function verify(
+  pubkeyHex: string,
+  signatureHex: string,
+  input: CanonicalInput,
+): boolean {
+  let pub: Uint8Array;
+  try {
+    pub = hexToBytes(pubkeyHex, 'pubkey');
+  } catch {
+    return false;
+  }
+  if (pub.length !== 32) return false;
+  return verifyWithPubkey(pub, signatureHex, input);
 }

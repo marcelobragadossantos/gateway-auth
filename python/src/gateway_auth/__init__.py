@@ -29,6 +29,8 @@ __all__ = [
     "canonical_payload",
     "sign",
     "verify",
+    "parse_pubkey",
+    "verify_with_pubkey",
     "InvalidSignature",
     "MissingRawBody",
     "TimestampOutOfWindow",
@@ -139,13 +141,27 @@ def sign(privkey_hex: str, inp: CanonicalInput) -> str:
     return sig.hex()
 
 
-def verify(pubkey_hex: str, signature_hex: str, inp: CanonicalInput) -> bool:
-    """Verify an Ed25519 signature for the canonical payload.
+def parse_pubkey(pubkey_hex: str) -> Ed25519PublicKey:
+    """Parse a 32-byte Ed25519 public key from hex.
 
-    Returns True if valid, False otherwise. Does not raise on cryptographic
-    mismatch (only on malformed key/signature input).
+    Use this once at startup (e.g. in a middleware constructor) and pass the
+    result to :func:`verify_with_pubkey` on every request — avoids re-parsing
+    hex on each verification.
+
+    Raises:
+        ValueError: if hex is malformed or not 32 bytes.
     """
-    pubkey = _pubkey_from_hex(pubkey_hex)
+    return _pubkey_from_hex(pubkey_hex)
+
+
+def verify_with_pubkey(
+    pubkey: Ed25519PublicKey, signature_hex: str, inp: CanonicalInput
+) -> bool:
+    """Verify with a pre-parsed pubkey. Hot-path variant.
+
+    Equivalent to :func:`verify` (pubkey_hex, ...) minus the per-call hex
+    parse. Call :func:`parse_pubkey` once at startup and reuse the result.
+    """
     try:
         signature = bytes.fromhex(signature_hex)
     except ValueError:
@@ -158,3 +174,17 @@ def verify(pubkey_hex: str, signature_hex: str, inp: CanonicalInput) -> bool:
         return True
     except _CryptoInvalidSignature:
         return False
+
+
+def verify(pubkey_hex: str, signature_hex: str, inp: CanonicalInput) -> bool:
+    """Verify an Ed25519 signature for the canonical payload.
+
+    Returns True if valid, False otherwise. Does not raise on cryptographic
+    mismatch (only on malformed key/signature input).
+
+    For hot paths (HTTP middleware), prefer :func:`parse_pubkey` once +
+    :func:`verify_with_pubkey` per request to avoid re-parsing pubkey hex
+    on every call.
+    """
+    pubkey = _pubkey_from_hex(pubkey_hex)
+    return verify_with_pubkey(pubkey, signature_hex, inp)

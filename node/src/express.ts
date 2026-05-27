@@ -6,7 +6,7 @@
  * what the gateway signed — body-parser's parsed/restringified JSON will NOT.
  */
 import type { Request, RequestHandler, Response, NextFunction } from 'express';
-import { verify, GatewayAuthError } from './index.js';
+import { parsePubkey, verifyWithPubkey, GatewayAuthError } from './index.js';
 
 export type AuthMode = 'off' | 'warn' | 'enforce';
 
@@ -56,7 +56,7 @@ interface ValidationFailure {
 }
 
 interface ValidationContext {
-  pubkeyHex: string;
+  pubkey: Uint8Array;
   maxSkewSeconds: number;
   now: () => number;
 }
@@ -103,7 +103,7 @@ function validateSignature(
 
   let ok = false;
   try {
-    ok = verify(ctx.pubkeyHex, sigHex, {
+    ok = verifyWithPubkey(ctx.pubkey, sigHex, {
       method: req.method,
       path: req.path,
       uid,
@@ -135,6 +135,7 @@ export function gatewayAuthMiddleware(
       `gatewayAuthMiddleware: invalid mode '${mode}' (expected off|warn|enforce)`,
     );
   }
+  let parsedPubkey: Uint8Array;
   if (mode !== 'off') {
     if (!opts.pubkeyHex || typeof opts.pubkeyHex !== 'string') {
       throw new Error('gatewayAuthMiddleware: pubkeyHex is required for warn|enforce');
@@ -144,10 +145,15 @@ export function gatewayAuthMiddleware(
         'gatewayAuthMiddleware: pubkeyHex must be 64 hex chars (32-byte Ed25519 public key)',
       );
     }
+    // Parse once at startup; reused per request (avoids re-parsing hex on every verify).
+    parsedPubkey = parsePubkey(opts.pubkeyHex);
+  } else {
+    // Off mode never reaches validateSignature; placeholder bytes are fine.
+    parsedPubkey = new Uint8Array(32);
   }
 
   const ctx: ValidationContext = {
-    pubkeyHex: opts.pubkeyHex,
+    pubkey: parsedPubkey,
     maxSkewSeconds: opts.maxSkewSeconds ?? 60,
     now: opts.now ?? (() => Math.floor(Date.now() / 1000)),
   };

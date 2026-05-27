@@ -22,7 +22,7 @@ import time
 from enum import Enum
 from typing import Awaitable, Callable, Optional
 
-from . import CanonicalInput, verify
+from . import CanonicalInput, parse_pubkey, verify_with_pubkey
 
 __all__ = ["AuthMode", "GatewayAuthMiddleware"]
 
@@ -43,12 +43,22 @@ HEADER_SIGNATURE = b"x-gateway-signature"
 _TIMESTAMP_RE = re.compile(r"\d+")
 
 
-async def _read_body(receive: Callable[[], Awaitable[dict]]) -> tuple[bytes, list[dict]]:
+class BodyTooLarge(Exception):
+    """Request body exceeded the configured max_body_bytes limit."""
+
+
+async def _read_body(
+    receive: Callable[[], Awaitable[dict]], max_body_bytes: Optional[int] = None
+) -> tuple[bytes, list[dict]]:
     """Consume the ASGI receive callable and concatenate the request body.
 
     Returns the body bytes plus the list of original messages so we can
     replay them downstream verbatim. This preserves streaming semantics
     (more_body flags, message boundaries) for the wrapped app.
+
+    If max_body_bytes is set and the accumulated body would exceed it,
+    raises BodyTooLarge before allocating further memory. Use this in
+    public endpoints to avoid OOM from a hostile upload.
     """
     messages: list[dict] = []
     body = b""
@@ -57,7 +67,12 @@ async def _read_body(receive: Callable[[], Awaitable[dict]]) -> tuple[bytes, lis
         message = await receive()
         messages.append(message)
         if message["type"] == "http.request":
-            body += message.get("body", b"") or b""
+            chunk = message.get("body", b"") or b""
+            if max_body_bytes is not None and len(body) + len(chunk) > max_body_bytes:
+                raise BodyTooLarge(
+                    f"request body exceeded max_body_bytes={max_body_bytes}"
+                )
+            body += chunk
             more_body = message.get("more_body", False)
         else:
             # http.disconnect or anything unexpected; stop draining
@@ -108,6 +123,21 @@ async def _send_401(send: Callable[[dict], Awaitable[None]], reason: str) -> Non
     await send({"type": "http.response.body", "body": body, "more_body": False})
 
 
+async def _send_413(send: Callable[[dict], Awaitable[None]], reason: str) -> None:
+    body = json.dumps({"error": "payload_too_large", "reason": reason}).encode("utf-8")
+    await send(
+        {
+            "type": "http.response.start",
+            "status": 413,
+            "headers": [
+                (b"content-type", b"application/json"),
+                (b"content-length", str(len(body)).encode("latin-1")),
+            ],
+        }
+    )
+    await send({"type": "http.response.body", "body": body, "more_body": False})
+
+
 class GatewayAuthMiddleware:
     """Pure ASGI middleware enforcing the Portal Gateway Ed25519 contract.
 
@@ -126,13 +156,20 @@ class GatewayAuthMiddleware:
         pubkey_hex: str,
         mode: AuthMode,
         max_skew_seconds: int = 60,
+        max_body_bytes: Optional[int] = None,
         logger: Optional[logging.Logger] = None,
     ) -> None:
         self.app = app
         self.pubkey_hex = pubkey_hex
         self.mode = AuthMode(mode) if not isinstance(mode, AuthMode) else mode
         self.max_skew_seconds = max_skew_seconds
+        self.max_body_bytes = max_body_bytes
         self.logger = logger or logging.getLogger("gateway_auth")
+        # Parse pubkey once at startup; reused per request.
+        # In off mode pubkey_hex may be empty — defer parsing until needed.
+        self._pubkey = None
+        if self.mode != AuthMode.OFF and self.pubkey_hex:
+            self._pubkey = parse_pubkey(self.pubkey_hex)
 
     async def __call__(self, scope, receive, send):
         # Only intercept HTTP; pass websocket/lifespan untouched.
@@ -153,7 +190,24 @@ class GatewayAuthMiddleware:
         sig = _header_get(headers, HEADER_SIGNATURE)
 
         # We need the raw body before we can validate, but we must replay it.
-        body, captured = await _read_body(receive)
+        try:
+            body, captured = await _read_body(receive, self.max_body_bytes)
+        except BodyTooLarge:
+            reason = "body_too_large"
+            extra = {
+                "path": path,
+                "method": method,
+                "max_body_bytes": self.max_body_bytes,
+            }
+            if self.mode == AuthMode.WARN:
+                self.logger.warning(
+                    "gateway_auth: %s", reason, extra={"gateway_auth": extra}
+                )
+                # In warn we cannot replay (we aborted mid-read), so 413.
+                await _send_413(send, reason)
+                return
+            await _send_413(send, reason)
+            return
         replay_receive = _make_replay_receive(captured)
 
         # Missing headers -> fail per mode
@@ -233,9 +287,9 @@ class GatewayAuthMiddleware:
             body=body,
         )
         try:
-            ok = verify(self.pubkey_hex, sig, inp)
+            ok = verify_with_pubkey(self._pubkey, sig, inp) if self._pubkey else False
         except ValueError:
-            # Malformed pubkey/signature hex
+            # Malformed signature hex
             ok = False
 
         if not ok:
