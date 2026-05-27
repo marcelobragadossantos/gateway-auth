@@ -185,3 +185,31 @@ async def test_mode_enforce_rejects_invalid_timestamp_format():
         r = await ac.get("/echo", headers=headers)
     assert r.status_code == 401
     assert r.json()["reason"] == "invalid_timestamp_format"
+
+
+@pytest.mark.parametrize(
+    "ts_value,label",
+    [
+        (" 1748390401 ", "whitespace"),
+        ("+1748390401", "plus_sign"),
+        ("1748390401abc", "trailing_junk"),
+        ("-1748390401", "minus_sign"),
+        ("1.748390401e9", "scientific_notation"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_mode_enforce_rejects_non_canonical_timestamp(ts_value, label):
+    """Cross-lang parity (issue #3): Node regex /^\\d+$/ rejects these,
+    Python int() previously accepted whitespace, '+' sign, etc. — now strict."""
+    app = _build_app(AuthMode.ENFORCE)
+    headers = {
+        "x-gateway-user-id": "42",
+        "x-gateway-timestamp": ts_value,
+        "x-gateway-signature": "00" * 64,
+    }
+    async with _client(app) as ac:
+        r = await ac.get("/echo", headers=headers)
+    assert r.status_code == 401, f"{label}: expected 401, got {r.status_code}"
+    assert r.json()["reason"] == "invalid_timestamp_format", (
+        f"{label}: expected invalid_timestamp_format, got {r.json()}"
+    )

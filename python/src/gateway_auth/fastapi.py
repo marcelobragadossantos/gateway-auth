@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import time
 from enum import Enum
 from typing import Awaitable, Callable, Optional
@@ -36,6 +37,10 @@ class AuthMode(str, Enum):
 HEADER_UID = b"x-gateway-user-id"
 HEADER_TIMESTAMP = b"x-gateway-timestamp"
 HEADER_SIGNATURE = b"x-gateway-signature"
+
+# Strict numeric format — int() alone accepts whitespace, '+' prefix, etc.
+# Match Node regex /^\d+$/ for cross-lang parity (see issue #3).
+_TIMESTAMP_RE = re.compile(r"\d+")
 
 
 async def _read_body(receive: Callable[[], Awaitable[dict]]) -> tuple[bytes, list[dict]]:
@@ -171,10 +176,24 @@ class GatewayAuthMiddleware:
             await _send_401(send, reason)
             return
 
-        # Parse timestamp
+        # Parse timestamp (strict: digits only, no whitespace, no sign — match Node)
+        if not _TIMESTAMP_RE.fullmatch(ts_raw):
+            reason = "invalid_timestamp_format"
+            if self.mode == AuthMode.WARN:
+                self.logger.warning(
+                    "gateway_auth: %s",
+                    reason,
+                    extra={"gateway_auth": {"path": path, "ts_raw": ts_raw}},
+                )
+                await self.app(scope, replay_receive, send)
+                return
+            await _send_401(send, reason)
+            return
+
         try:
             timestamp = int(ts_raw)
         except ValueError:
+            # Defensive: regex already enforced digits-only, but keep as safety net.
             reason = "invalid_timestamp_format"
             if self.mode == AuthMode.WARN:
                 self.logger.warning(
