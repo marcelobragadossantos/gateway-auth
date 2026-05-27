@@ -161,6 +161,26 @@ CI roda os dois lados (Node gera, Python valida; Python gera, Node valida). Gara
 
 ---
 
+## Threat model — o que esta lib protege (e o que não protege)
+
+Honest crypto: declarar explicitamente os limites evita uso indevido.
+
+**Protege contra**:
+- **Forge**: atacante sem a privkey não consegue construir um header `x-gateway-signature` que passe a verificação. Ed25519 é EUF-CMA seguro.
+- **Tampering**: qualquer alteração no método, path, uid, timestamp ou body bruto invalida a signature (verificação falha).
+- **Lateral movement entre backs**: cada back só tem a pubkey (não-secreta), não consegue forjar requests pra outro back.
+
+**Não protege contra (cliente da lib precisa cuidar separado)**:
+- **Replay dentro da janela `max_skew_seconds`** (default 60s): se atacante intercepta uma signature legítima (via log dump, proxy comprometido, etc.) e a reenvia dentro de 60s, validação passa. Mitigação: TLS em todo o caminho + cache anti-replay opcional (v0.2.0 roadmap) + monitoração de `(uid, timestamp)` duplicados em produção.
+- **MITM no TLS**: lib opera acima do transporte. HTTPS quebrado = game over para qualquer proteção subsequente. Use HSTS + cert pinning onde aplicável.
+- **Comprometimento da privkey**: se a privkey vazar (env dump, leak de log), atacante pode forjar qualquer signature. Mitigação: rotação documentada, monitorar uso anômalo, rodar em ambiente com acesso restrito.
+- **Comprometimento do back que valida**: signature válida não significa que o back deve confiar cegamente no conteúdo. Mantenha validação de input/autorização semântica no back.
+- **DoS via body grande pré-validação**: middleware lê body inteiro em memória antes de calcular hash (necessário pro contrato). Sem limite externo (`uvicorn --limit-request-body`, nginx `client_max_body_size`), atacante pode esgotar memória mesmo enviando signature falsa.
+
+**Resumo**: a lib é a peça de **autenticação de origem** entre gateway e back. Não substitui TLS, não substitui rate limiting, não substitui validação de input, não substitui auditoria. É uma camada **necessária mas não suficiente**.
+
+---
+
 ## Roadmap
 
 | Versão | Conteúdo |
