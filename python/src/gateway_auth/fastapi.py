@@ -258,7 +258,12 @@ class GatewayAuthMiddleware:
         if self.service_authenticator is not None:
             try:
                 svc_id = self.service_authenticator(_headers_map(headers))
-            except Exception:  # authenticator must never crash the request path
+            except Exception as exc:  # authenticator must never crash the request
+                # Fail closed (fall through to signature gate), but surface the
+                # error so a misconfigured authenticator isn't silently masked.
+                self.logger.warning(
+                    "gateway_auth: service_authenticator raised: %r", exc
+                )
                 svc_id = None
             if svc_id:
                 _set_principal(scope, "service", svc_id)

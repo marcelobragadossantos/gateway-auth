@@ -177,7 +177,8 @@ Quando o authenticator retorna um id, o request **pula a verificacao de assinatu
 - **`None` por default** → comportamento identico ao anterior (zero breaking change pros backs que nao usam).
 - O principal resolvido fica em `request.state.gateway_principal` = `{"kind": "user"|"service", "id": ...}`. Use pra escopar permissao (servico **nunca** vira usuario; gates de admin que exigem prova de `uid` **nao** sao satisfeitos por servico).
 - Use um **segredo dedicado** (nao um segredo de canal reusado) e **nao o envie no caminho do browser** — senao o exempt reabre o bypass de assinatura que o `enforce` existe pra fechar.
-- Excecao no authenticator nunca derruba o request (cai pro fluxo normal de assinatura).
+- Excecao no authenticator nunca derruba o request (cai pro fluxo normal de assinatura, **fail-closed**), e e logada como `warning` pra nao mascarar config errada.
+- `max_body_bytes` **nao** se aplica ao caminho de servico (o body nao e lido) — o controle de tamanho do s2s confiavel fica no proxy/downstream.
 
 ### Logger
 
