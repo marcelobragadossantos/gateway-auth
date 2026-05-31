@@ -148,6 +148,37 @@ app.add_middleware(
 - Signature invalida → 401 com `reason=invalid_signature`.
 - Scope nao-HTTP (websocket, lifespan) passa direto sem inspecao.
 
+### Principal de servico (`service_authenticator`) — v0.4.0
+
+Chamadas **server-to-server** (cron, webhook, jobs) nao tem usuario e — na Opcao A, com a privkey **so no gateway** — nao tem como assinar. Pra elas passarem em `enforce` sem afrouxar a verificacao de identidade do browser, passe um `service_authenticator`: um callable que recebe os headers (dict, chaves lowercase) e retorna um **id de servico** (str truthy) quando reconhece um chamador confiavel — tipicamente um **token de servico dedicado**.
+
+```python
+import hmac, os
+from gateway_auth.fastapi import GatewayAuthMiddleware, AuthMode
+
+SERVICE_TOKEN = os.environ["GATEWAY_SERVICE_TOKEN"]  # dedicado, forte, rotacionavel
+
+def service_auth(headers):
+    tok = headers.get("x-service-token")
+    if tok and hmac.compare_digest(tok, SERVICE_TOKEN):
+        return "svc:meu-front"   # id do servico (sem identidade de usuario)
+    return None
+
+app.add_middleware(
+    GatewayAuthMiddleware,
+    pubkey_hex=os.environ["GATEWAY_SIGNING_PUBKEY"],
+    mode=AuthMode(os.environ.get("GATEWAY_AUTH_MODE", "off")),
+    service_authenticator=service_auth,   # None (default) = feature desligada
+)
+```
+
+Quando o authenticator retorna um id, o request **pula a verificacao de assinatura** e segue como principal de servico. Regras:
+
+- **`None` por default** → comportamento identico ao anterior (zero breaking change pros backs que nao usam).
+- O principal resolvido fica em `request.state.gateway_principal` = `{"kind": "user"|"service", "id": ...}`. Use pra escopar permissao (servico **nunca** vira usuario; gates de admin que exigem prova de `uid` **nao** sao satisfeitos por servico).
+- Use um **segredo dedicado** (nao um segredo de canal reusado) e **nao o envie no caminho do browser** — senao o exempt reabre o bypass de assinatura que o `enforce` existe pra fechar.
+- Excecao no authenticator nunca derruba o request (cai pro fluxo normal de assinatura).
+
 ### Logger
 
 Default: `logging.getLogger("gateway_auth")`. Em `warn`, cada falha vira um `logger.warning(...)` com campo `extra={"gateway_auth": {...}}` carregando path, method, uid, motivo. Compativel com formatters JSON estruturados.
@@ -193,7 +224,7 @@ Os testes em `tests/test_fastapi.py` cobrem os 3 modos (off/warn/enforce), prese
 
 ## Versao
 
-`0.1.0` — primeira release. Roadmap completo no [README raiz](../README.md#roadmap).
+`0.4.0` — `service_authenticator` (principal de servico) + `request.state.gateway_principal`. Antes: `0.3.1` (janela de skew via env `GATEWAY_MAX_SKEW_S`). Roadmap completo no [README raiz](../README.md#roadmap).
 
 ---
 
