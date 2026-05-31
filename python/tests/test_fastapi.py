@@ -163,6 +163,43 @@ async def test_mode_enforce_rejects_out_of_window_timestamp():
 
 
 @pytest.mark.asyncio
+async def test_max_skew_seconds_from_env(monkeypatch):
+    """Sem max_skew_seconds explícito, a janela vem de GATEWAY_MAX_SKEW_S —
+    permite afrouxar p/ hosts com clock dessincronizado (NTP) sem mudar código."""
+    monkeypatch.setenv("GATEWAY_MAX_SKEW_S", "600")
+    app = _build_app(AuthMode.ENFORCE)  # nao passa max_skew_seconds
+    ts = int(time.time()) - 300  # 5min no passado: fora dos 60s default, dentro de 600
+    headers = _sign_request("GET", "/echo", "42", ts, b"")
+    async with _client(app) as ac:
+        r = await ac.get("/echo", headers=headers)
+    assert r.status_code == 200, r.text
+
+
+@pytest.mark.asyncio
+async def test_default_skew_60_when_env_unset(monkeypatch):
+    monkeypatch.delenv("GATEWAY_MAX_SKEW_S", raising=False)
+    app = _build_app(AuthMode.ENFORCE)
+    ts = int(time.time()) - 300  # 5min: fora dos 60s default
+    headers = _sign_request("GET", "/echo", "42", ts, b"")
+    async with _client(app) as ac:
+        r = await ac.get("/echo", headers=headers)
+    assert r.status_code == 401
+    assert r.json()["reason"] == "timestamp_out_of_window"
+
+
+@pytest.mark.asyncio
+async def test_explicit_skew_arg_overrides_env(monkeypatch):
+    # Arg explícito tem precedência sobre a env.
+    monkeypatch.setenv("GATEWAY_MAX_SKEW_S", "600")
+    app = _build_app(AuthMode.ENFORCE, max_skew_seconds=60)
+    ts = int(time.time()) - 300
+    headers = _sign_request("GET", "/echo", "42", ts, b"")
+    async with _client(app) as ac:
+        r = await ac.get("/echo", headers=headers)
+    assert r.status_code == 401
+
+
+@pytest.mark.asyncio
 async def test_mode_warn_logs_and_passes_invalid_signature(caplog):
     caplog.set_level(logging.WARNING, logger="gateway_auth")
     app = _build_app(AuthMode.WARN)
