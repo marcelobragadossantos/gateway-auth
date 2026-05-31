@@ -234,6 +234,53 @@ describe('gatewayAuthMiddleware - mode=enforce', () => {
   });
 });
 
+describe('gatewayAuthMiddleware - exempt paths', () => {
+  it.each(['/health', '/api/health'])(
+    'lets unsigned %s through in enforce (default exempt)',
+    (path) => {
+      const mw = gatewayAuthMiddleware({
+        pubkeyHex: pubkey_hex,
+        mode: 'enforce',
+        now: freshNow,
+      });
+      const next = vi.fn();
+      const { res, status } = buildRes();
+      mw(buildReq({ method: 'GET', path, url: path }), res, next as NextFunction);
+      expect(next).toHaveBeenCalledOnce();
+      expect(status).not.toHaveBeenCalled();
+    },
+  );
+
+  it('custom exemptPaths replace the default (default no longer exempt)', () => {
+    const mw = gatewayAuthMiddleware({
+      pubkeyHex: pubkey_hex,
+      mode: 'enforce',
+      now: freshNow,
+      exemptPaths: ['/livez'],
+    });
+    // /livez is exempt -> passes; /health is no longer exempt -> 401.
+    const nextExempt = vi.fn();
+    const exemptRes = buildRes();
+    mw(
+      buildReq({ method: 'GET', path: '/livez', url: '/livez' }),
+      exemptRes.res,
+      nextExempt as NextFunction,
+    );
+    expect(nextExempt).toHaveBeenCalledOnce();
+    expect(exemptRes.status).not.toHaveBeenCalled();
+
+    const nextHealth = vi.fn();
+    const healthRes = buildRes();
+    mw(
+      buildReq({ method: 'GET', path: '/health', url: '/health' }),
+      healthRes.res,
+      nextHealth as NextFunction,
+    );
+    expect(nextHealth).not.toHaveBeenCalled();
+    expect(healthRes.status).toHaveBeenCalledWith(401);
+  });
+});
+
 describe('gatewayAuthMiddleware - mode=warn', () => {
   it('passes through on invalid signature but logs', () => {
     const body = Buffer.from('original', 'utf8');
