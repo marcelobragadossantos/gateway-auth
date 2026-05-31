@@ -35,6 +35,10 @@ def _build_app(mode: AuthMode, pubkey: str = TEST_PUBKEY, **kwargs) -> FastAPI:
     async def health():
         return {"status": "ok"}
 
+    @app.get("/whoami")
+    async def whoami(request: Request):
+        return {"principal": getattr(request.state, "gateway_principal", None)}
+
     @app.get("/api/health")
     async def api_health():
         return {"status": "ok"}
@@ -282,3 +286,92 @@ async def test_mode_enforce_rejects_non_canonical_timestamp(ts_value, label):
     assert r.json()["reason"] == "invalid_timestamp_format", (
         f"{label}: expected invalid_timestamp_format, got {r.json()}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Service principal (service_authenticator)
+# ---------------------------------------------------------------------------
+
+SERVICE_TOKEN = "s3rv1ce-t0ken-dedicated-and-strong"
+
+
+def _service_auth(headers):
+    """Sample authenticator: a fixed dedicated header == trusted service."""
+    tok = headers.get("x-service-token")
+    if tok and tok == SERVICE_TOKEN:
+        return "svc:test-front-realtime"
+    return None
+
+
+@pytest.mark.asyncio
+async def test_service_principal_bypasses_signature_in_enforce():
+    app = _build_app(AuthMode.ENFORCE, service_authenticator=_service_auth)
+    async with _client(app) as ac:
+        r = await ac.get("/echo", headers={"x-service-token": SERVICE_TOKEN})
+    assert r.status_code == 200
+    assert r.json() == {"method": "GET", "path": "/echo"}
+
+
+@pytest.mark.asyncio
+async def test_service_principal_recorded_in_state():
+    app = _build_app(AuthMode.ENFORCE, service_authenticator=_service_auth)
+    async with _client(app) as ac:
+        r = await ac.get("/whoami", headers={"x-service-token": SERVICE_TOKEN})
+    assert r.status_code == 200
+    assert r.json()["principal"] == {"kind": "service", "id": "svc:test-front-realtime"}
+
+
+@pytest.mark.asyncio
+async def test_user_principal_recorded_in_state():
+    app = _build_app(AuthMode.ENFORCE)
+    ts = int(time.time())
+    headers = _sign_request("GET", "/whoami", "42", ts, b"")
+    async with _client(app) as ac:
+        r = await ac.get("/whoami", headers=headers)
+    assert r.status_code == 200
+    assert r.json()["principal"] == {"kind": "user", "id": "42"}
+
+
+@pytest.mark.asyncio
+async def test_invalid_service_token_does_not_bypass():
+    # Wrong token -> authenticator returns None -> normal signature gate applies.
+    app = _build_app(AuthMode.ENFORCE, service_authenticator=_service_auth)
+    async with _client(app) as ac:
+        r = await ac.get("/echo", headers={"x-service-token": "wrong"})
+    assert r.status_code == 401
+    assert r.json()["reason"] == "missing_required_headers"
+
+
+@pytest.mark.asyncio
+async def test_no_authenticator_is_unchanged_behavior():
+    # Default (no service_authenticator): service header is meaningless, 401.
+    app = _build_app(AuthMode.ENFORCE)
+    async with _client(app) as ac:
+        r = await ac.get("/echo", headers={"x-service-token": SERVICE_TOKEN})
+    assert r.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_authenticator_exception_does_not_crash_request():
+    def boom(headers):
+        raise RuntimeError("authenticator blew up")
+
+    app = _build_app(AuthMode.ENFORCE, service_authenticator=boom)
+    async with _client(app) as ac:
+        # No signature, authenticator raises -> falls through to 401 (not 500).
+        r = await ac.get("/echo")
+    assert r.status_code == 401
+    assert r.json()["reason"] == "missing_required_headers"
+
+
+@pytest.mark.asyncio
+async def test_signature_still_works_with_authenticator_present():
+    # A valid gateway signature must still authenticate as user even when a
+    # service_authenticator is configured (signature path unaffected).
+    app = _build_app(AuthMode.ENFORCE, service_authenticator=_service_auth)
+    ts = int(time.time())
+    headers = _sign_request("GET", "/whoami", "7", ts, b"")
+    async with _client(app) as ac:
+        r = await ac.get("/whoami", headers=headers)
+    assert r.status_code == 200
+    assert r.json()["principal"] == {"kind": "user", "id": "7"}

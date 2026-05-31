@@ -188,6 +188,8 @@ Honest crypto: declarar explicitamente os limites evita uso indevido.
 | `v0.1.0` | Lib Node + Lib Python + vectors.json + CI cross-lang |
 | `v0.2.0` | Rotação com 2 pubkeys ativas (overlap) + cache anti-replay opcional |
 | `v0.3.0` | Suporte a novos métodos (PATCH/DELETE com edge cases), Go ou Rust se demandado |
+| `v0.3.1` | Janela de skew configurável via env `GATEWAY_MAX_SKEW_S` (hosts sem NTP) |
+| `v0.4.0` | `service_authenticator` (principal de serviço para chamadas server-to-server) + `request.state.gateway_principal` |
 
 ---
 

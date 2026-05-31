@@ -21,7 +21,7 @@ import os
 import re
 import time
 from enum import Enum
-from typing import Awaitable, Callable, Iterable, Optional
+from typing import Awaitable, Callable, Iterable, Mapping, Optional
 
 from . import CanonicalInput, parse_pubkey, verify_with_pubkey
 
@@ -114,6 +114,27 @@ def _header_get(headers: list[tuple[bytes, bytes]], name: bytes) -> Optional[str
     return None
 
 
+def _headers_map(headers: list[tuple[bytes, bytes]]) -> dict[str, str]:
+    """Flatten ASGI headers into a {lowercase_name: value} dict (last wins).
+
+    Convenience view handed to a service_authenticator so it can look headers
+    up by name without dealing with raw bytes tuples.
+    """
+    out: dict[str, str] = {}
+    for k, v in headers:
+        out[k.decode("latin-1").lower()] = v.decode("latin-1")
+    return out
+
+
+def _set_principal(scope: dict, kind: str, ident: Optional[str]) -> None:
+    """Record the resolved principal in scope state for downstream handlers.
+
+    Readable as `request.state.gateway_principal` (Starlette reads scope["state"]).
+    `kind` is "user" (gateway-signed identity) or "service" (trusted s2s caller).
+    """
+    scope.setdefault("state", {})["gateway_principal"] = {"kind": kind, "id": ident}
+
+
 async def _send_401(send: Callable[[dict], Awaitable[None]], reason: str) -> None:
     body = json.dumps({"error": "invalid_gateway_signature", "reason": reason}).encode(
         "utf-8"
@@ -166,11 +187,26 @@ class GatewayAuthMiddleware:
         max_skew_seconds: Optional[int] = None,
         max_body_bytes: Optional[int] = None,
         exempt_paths: Optional[Iterable[str]] = None,
+        service_authenticator: Optional[
+            Callable[[Mapping[str, str]], Optional[str]]
+        ] = None,
         logger: Optional[logging.Logger] = None,
     ) -> None:
         self.app = app
         self.pubkey_hex = pubkey_hex
         self.mode = AuthMode(mode) if not isinstance(mode, AuthMode) else mode
+        # Autenticador de SERVIÇO (opcional). Recebe os headers (chaves lowercase)
+        # e retorna um id de serviço (str truthy) quando reconhece uma chamada
+        # server-to-server confiável — ex.: um token de serviço dedicado. Nesse
+        # caso o request é tratado como PRINCIPAL DE SERVIÇO e PULA a verificação
+        # de assinatura (jobs/cron/webhooks não têm usuário e a privkey só vive no
+        # gateway, então não há como assiná-los). NÃO confere identidade de
+        # usuário: nunca satisfaz gates de admin (que exigem prova de uid). Use um
+        # segredo DEDICADO e forte, jamais um segredo de canal reusado, e NÃO o
+        # envie no caminho do browser (senão o exempt reabre o bypass de
+        # assinatura). None (default) = feature desligada, comportamento idêntico
+        # ao anterior. O resultado fica em `scope["state"]["gateway_principal"]`.
+        self.service_authenticator = service_authenticator
         # Janela anti-replay do timestamp: arg explícito > env GATEWAY_MAX_SKEW_S
         # > 60s. Permite afrouxar a janela quando os hosts (gateway vs back) estão
         # com relógio dessincronizado (NTP), sem mudar código do consumidor — só
@@ -214,6 +250,25 @@ class GatewayAuthMiddleware:
         method: str = scope.get("method", "GET")
         path: str = scope.get("path", "/")
         headers: list[tuple[bytes, bytes]] = scope.get("headers", [])
+
+        # Service principal: a trusted server-to-server caller (cron/webhook/job)
+        # presents a dedicated service credential instead of a gateway signature.
+        # Checked BEFORE requiring a signature so it short-circuits without
+        # consuming the request body. Carries NO user identity.
+        if self.service_authenticator is not None:
+            try:
+                svc_id = self.service_authenticator(_headers_map(headers))
+            except Exception as exc:  # authenticator must never crash the request
+                # Fail closed (fall through to signature gate), but surface the
+                # error so a misconfigured authenticator isn't silently masked.
+                self.logger.warning(
+                    "gateway_auth: service_authenticator raised: %r", exc
+                )
+                svc_id = None
+            if svc_id:
+                _set_principal(scope, "service", svc_id)
+                await self.app(scope, receive, send)
+                return
 
         uid = _header_get(headers, HEADER_UID)
         ts_raw = _header_get(headers, HEADER_TIMESTAMP)
@@ -339,5 +394,6 @@ class GatewayAuthMiddleware:
             await _send_401(send, reason)
             return
 
-        # Valid: pass through with replayed body.
+        # Valid: record the user principal and pass through with replayed body.
+        _set_principal(scope, "user", uid)
         await self.app(scope, replay_receive, send)
