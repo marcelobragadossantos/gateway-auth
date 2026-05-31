@@ -19,7 +19,7 @@ export interface ExpressMiddlewareOptions {
   pubkeyHex: string;
   /** off | warn | enforce. */
   mode: AuthMode;
-  /** Anti-replay window in seconds (default 60). */
+  /** Anti-replay window in seconds. Default: env GATEWAY_MAX_SKEW_S or 60. */
   maxSkewSeconds?: number;
   /** Custom logger (defaults to console). */
   logger?: MiddlewareLogger;
@@ -40,6 +40,18 @@ const HEADER_SIG = 'x-gateway-signature';
 
 /** Liveness/health paths kept public by default (gateway never signs probes). */
 export const DEFAULT_EXEMPT_PATHS = ['/health', '/api/health'];
+
+/**
+ * Skew window from env GATEWAY_MAX_SKEW_S. Lets you loosen the timestamp
+ * anti-replay window when gateway/back host clocks drift (NTP) without code
+ * changes. Returns undefined if unset/invalid (caller falls back to 60s).
+ */
+function envMaxSkewSeconds(): number | undefined {
+  const raw = process.env.GATEWAY_MAX_SKEW_S;
+  if (!raw) return undefined;
+  const n = Number.parseInt(raw, 10);
+  return Number.isInteger(n) && n > 0 ? n : undefined;
+}
 
 interface RequestWithRawBody extends Request {
   rawBody?: Buffer;
@@ -164,7 +176,7 @@ export function gatewayAuthMiddleware(
 
   const ctx: ValidationContext = {
     pubkey: parsedPubkey,
-    maxSkewSeconds: opts.maxSkewSeconds ?? 60,
+    maxSkewSeconds: opts.maxSkewSeconds ?? envMaxSkewSeconds() ?? 60,
     now: opts.now ?? (() => Math.floor(Date.now() / 1000)),
   };
   const logger = opts.logger ?? defaultLogger();

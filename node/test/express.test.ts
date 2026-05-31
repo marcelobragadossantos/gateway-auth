@@ -281,6 +281,66 @@ describe('gatewayAuthMiddleware - exempt paths', () => {
   });
 });
 
+describe('gatewayAuthMiddleware - skew window from env', () => {
+  it('uses GATEWAY_MAX_SKEW_S when maxSkewSeconds not passed', () => {
+    const body = Buffer.alloc(0);
+    const ts = freshNow();
+    const headers = signedHeaders({
+      method: 'GET', path: '/v1/users/me', uid: '42', timestamp: ts, body,
+    });
+    const prev = process.env.GATEWAY_MAX_SKEW_S;
+    process.env.GATEWAY_MAX_SKEW_S = '600';
+    try {
+      const mw = gatewayAuthMiddleware({
+        pubkeyHex: pubkey_hex,
+        mode: 'enforce',
+        now: () => ts + 300, // 5min ahead: outside 60s, inside 600s
+      });
+      const next = vi.fn();
+      const { res, status } = buildRes();
+      mw(
+        buildReq({ method: 'GET', path: '/v1/users/me', url: '/v1/users/me', headers, rawBody: body }),
+        res,
+        next as NextFunction,
+      );
+      expect(next).toHaveBeenCalledOnce();
+      expect(status).not.toHaveBeenCalled();
+    } finally {
+      if (prev === undefined) delete process.env.GATEWAY_MAX_SKEW_S;
+      else process.env.GATEWAY_MAX_SKEW_S = prev;
+    }
+  });
+
+  it('defaults to 60s when env unset (rejects 5min skew)', () => {
+    const body = Buffer.alloc(0);
+    const ts = freshNow();
+    const headers = signedHeaders({
+      method: 'GET', path: '/v1/users/me', uid: '42', timestamp: ts, body,
+    });
+    const prev = process.env.GATEWAY_MAX_SKEW_S;
+    delete process.env.GATEWAY_MAX_SKEW_S;
+    try {
+      const mw = gatewayAuthMiddleware({ pubkeyHex: pubkey_hex, mode: 'enforce', now: () => ts + 300 });
+      const next = vi.fn();
+      const { res, status, json } = buildRes();
+      mw(
+        buildReq({ method: 'GET', path: '/v1/users/me', url: '/v1/users/me', headers, rawBody: body }),
+        res,
+        next as NextFunction,
+      );
+      expect(next).not.toHaveBeenCalled();
+      expect(status).toHaveBeenCalledWith(401);
+      expect(json).toHaveBeenCalledWith({
+        error: 'invalid_gateway_signature',
+        reason: 'timestamp_outside_window',
+      });
+    } finally {
+      if (prev === undefined) delete process.env.GATEWAY_MAX_SKEW_S;
+      else process.env.GATEWAY_MAX_SKEW_S = prev;
+    }
+  });
+});
+
 describe('gatewayAuthMiddleware - mode=warn', () => {
   it('passes through on invalid signature but logs', () => {
     const body = Buffer.from('original', 'utf8');

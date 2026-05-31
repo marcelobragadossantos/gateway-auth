@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 import time
 from enum import Enum
@@ -162,7 +163,7 @@ class GatewayAuthMiddleware:
         app,
         pubkey_hex: str,
         mode: AuthMode,
-        max_skew_seconds: int = 60,
+        max_skew_seconds: Optional[int] = None,
         max_body_bytes: Optional[int] = None,
         exempt_paths: Optional[Iterable[str]] = None,
         logger: Optional[logging.Logger] = None,
@@ -170,6 +171,16 @@ class GatewayAuthMiddleware:
         self.app = app
         self.pubkey_hex = pubkey_hex
         self.mode = AuthMode(mode) if not isinstance(mode, AuthMode) else mode
+        # Janela anti-replay do timestamp: arg explícito > env GATEWAY_MAX_SKEW_S
+        # > 60s. Permite afrouxar a janela quando os hosts (gateway vs back) estão
+        # com relógio dessincronizado (NTP), sem mudar código do consumidor — só
+        # setar a env. Tradeoff: janela maior = janela de replay maior (a assinatura
+        # Ed25519 ainda impede forja; replay só reenvia request legítimo).
+        if max_skew_seconds is None:
+            try:
+                max_skew_seconds = int(os.environ.get("GATEWAY_MAX_SKEW_S", "60"))
+            except (TypeError, ValueError):
+                max_skew_seconds = 60
         self.max_skew_seconds = max_skew_seconds
         self.max_body_bytes = max_body_bytes
         self.exempt_paths = (
