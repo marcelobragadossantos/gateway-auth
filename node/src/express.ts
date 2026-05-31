@@ -23,6 +23,13 @@ export interface ExpressMiddlewareOptions {
   maxSkewSeconds?: number;
   /** Custom logger (defaults to console). */
   logger?: MiddlewareLogger;
+  /**
+   * Request paths exempt from validation in every mode (matched against
+   * `req.path`). Health/liveness probes carry no signature; in enforce they
+   * would 401 and crash-loop the container. Defaults to DEFAULT_EXEMPT_PATHS;
+   * pass your own array to replace it.
+   */
+  exemptPaths?: string[];
   /** Now provider, mostly for tests. Returns unix seconds. */
   now?: () => number;
 }
@@ -30,6 +37,9 @@ export interface ExpressMiddlewareOptions {
 const HEADER_UID = 'x-gateway-user-id';
 const HEADER_TS = 'x-gateway-timestamp';
 const HEADER_SIG = 'x-gateway-signature';
+
+/** Liveness/health paths kept public by default (gateway never signs probes). */
+export const DEFAULT_EXEMPT_PATHS = ['/health', '/api/health'];
 
 interface RequestWithRawBody extends Request {
   rawBody?: Buffer;
@@ -158,6 +168,7 @@ export function gatewayAuthMiddleware(
     now: opts.now ?? (() => Math.floor(Date.now() / 1000)),
   };
   const logger = opts.logger ?? defaultLogger();
+  const exemptPaths = new Set(opts.exemptPaths ?? DEFAULT_EXEMPT_PATHS);
 
   return function gatewayAuth(
     req: RequestWithRawBody,
@@ -165,6 +176,13 @@ export function gatewayAuthMiddleware(
     next: NextFunction,
   ): void {
     if (mode === 'off') {
+      next();
+      return;
+    }
+
+    // Health/liveness paths bypass validation so unsigned orchestrator probes
+    // don't 401 into a crash-loop.
+    if (exemptPaths.has(req.path)) {
       next();
       return;
     }

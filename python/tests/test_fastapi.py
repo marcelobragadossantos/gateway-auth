@@ -31,6 +31,14 @@ def _build_app(mode: AuthMode, pubkey: str = TEST_PUBKEY, **kwargs) -> FastAPI:
     async def echo(request: Request):
         return {"method": request.method, "path": request.url.path}
 
+    @app.get("/health")
+    async def health():
+        return {"status": "ok"}
+
+    @app.get("/api/health")
+    async def api_health():
+        return {"status": "ok"}
+
     @app.post("/echo")
     async def echo_post(request: Request):
         # Read the body to confirm the middleware preserved it.
@@ -185,6 +193,30 @@ async def test_mode_enforce_rejects_invalid_timestamp_format():
         r = await ac.get("/echo", headers=headers)
     assert r.status_code == 401
     assert r.json()["reason"] == "invalid_timestamp_format"
+
+
+@pytest.mark.parametrize("path", ["/health", "/api/health"])
+@pytest.mark.asyncio
+async def test_enforce_exempts_default_health_paths(path):
+    """Health/liveness probes carry no signature; enforce must let them through
+    so the orchestrator's health check doesn't crash-loop the container."""
+    app = _build_app(AuthMode.ENFORCE)
+    async with _client(app) as ac:
+        r = await ac.get(path)
+    assert r.status_code == 200, r.text
+    assert r.json() == {"status": "ok"}
+
+
+@pytest.mark.asyncio
+async def test_custom_exempt_paths_replace_default():
+    # Custom set exempts /echo but NOT /health (default is replaced, not merged).
+    app = _build_app(AuthMode.ENFORCE, exempt_paths={"/echo"})
+    async with _client(app) as ac:
+        r_echo = await ac.get("/echo")
+        r_health = await ac.get("/health")
+    assert r_echo.status_code == 200
+    assert r_health.status_code == 401
+    assert r_health.json()["reason"] == "missing_required_headers"
 
 
 @pytest.mark.parametrize(

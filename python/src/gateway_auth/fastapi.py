@@ -20,7 +20,7 @@ import logging
 import re
 import time
 from enum import Enum
-from typing import Awaitable, Callable, Optional
+from typing import Awaitable, Callable, Iterable, Optional
 
 from . import CanonicalInput, parse_pubkey, verify_with_pubkey
 
@@ -41,6 +41,13 @@ HEADER_SIGNATURE = b"x-gateway-signature"
 # Strict numeric format — int() alone accepts whitespace, '+' prefix, etc.
 # Match Node regex /^\d+$/ for cross-lang parity (see issue #3).
 _TIMESTAMP_RE = re.compile(r"\d+")
+
+# Paths exempt from signature validation in every mode. Liveness/health probes
+# (Docker HEALTHCHECK, Easypanel health check, k8s probes) hit the app directly
+# without a gateway signature; in enforce they would 401 and the orchestrator
+# would crash-loop the container. Keep these public by default. Callers can pass
+# their own set via the exempt_paths argument (replaces this default).
+DEFAULT_EXEMPT_PATHS = frozenset({"/health", "/api/health"})
 
 
 class BodyTooLarge(Exception):
@@ -157,6 +164,7 @@ class GatewayAuthMiddleware:
         mode: AuthMode,
         max_skew_seconds: int = 60,
         max_body_bytes: Optional[int] = None,
+        exempt_paths: Optional[Iterable[str]] = None,
         logger: Optional[logging.Logger] = None,
     ) -> None:
         self.app = app
@@ -164,6 +172,11 @@ class GatewayAuthMiddleware:
         self.mode = AuthMode(mode) if not isinstance(mode, AuthMode) else mode
         self.max_skew_seconds = max_skew_seconds
         self.max_body_bytes = max_body_bytes
+        self.exempt_paths = (
+            frozenset(exempt_paths)
+            if exempt_paths is not None
+            else DEFAULT_EXEMPT_PATHS
+        )
         self.logger = logger or logging.getLogger("gateway_auth")
         # Parse pubkey once at startup; reused per request.
         # In off mode pubkey_hex may be empty — defer parsing until needed.
@@ -178,6 +191,12 @@ class GatewayAuthMiddleware:
             return
 
         if self.mode == AuthMode.OFF:
+            await self.app(scope, receive, send)
+            return
+
+        # Health/liveness paths bypass validation so orchestrator probes (which
+        # carry no signature) don't 401 the container into a crash-loop.
+        if scope.get("path", "/") in self.exempt_paths:
             await self.app(scope, receive, send)
             return
 
