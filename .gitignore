@@ -23,3 +23,11 @@ Thumbs.db
 
 # Local
 *.local
+
+# Scripts temporarios/scratch que podem conter segredos (privkey, tokens).
+# Probes assinados (_probe_*.py) carregam a privkey do gateway — nunca commitar.
+# Padroes especificos pra NAO casar __init__.py / arquivos de source legitimos.
+_probe_*.py
+_probe_*.js
+_scratch_*.py
+_scratch_*.js
