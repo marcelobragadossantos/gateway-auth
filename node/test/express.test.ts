@@ -546,3 +546,130 @@ describe('integration with real Express app', () => {
     }
   });
 });
+
+describe('gatewayAuthMiddleware - path percent-encoded (paridade com o portal)', () => {
+  const wireCases: Array<{
+    name: string;
+    wire_path: string;
+    canonical_path: string;
+    input: { method: string; uid: string; timestamp: number };
+    expected_signature_hex: string;
+  }> = vectors.wire_path_cases;
+
+  it('fixtures cross-lang presentes (espaco, acento, %2F, %25, malformado)', () => {
+    expect(wireCases.map((c) => c.name)).toEqual([
+      'wire_space',
+      'wire_accent',
+      'wire_slash',
+      'wire_percent',
+      'wire_malformed',
+    ]);
+  });
+
+  describe.each(wireCases)('$name', (c) => {
+    const headers = {
+      'x-gateway-user-id': c.input.uid,
+      'x-gateway-timestamp': String(c.input.timestamp),
+      'x-gateway-signature': c.expected_signature_hex,
+    };
+    const run = (mode: 'enforce' | 'warn', rawPath: string) => {
+      const mw = gatewayAuthMiddleware({
+        pubkeyHex: pubkey_hex,
+        mode,
+        now: () => c.input.timestamp,
+      });
+      const next = vi.fn();
+      const { res, status, json } = buildRes();
+      mw(
+        buildReq({
+          method: c.input.method,
+          path: rawPath,
+          url: rawPath,
+          headers,
+          rawBody: Buffer.alloc(0),
+        }),
+        res,
+        next as NextFunction,
+      );
+      return { next, status, json };
+    };
+
+    it('aceita a assinatura do path canonico quando req.path vem encoded', () => {
+      const { next, status } = run('enforce', c.wire_path);
+      expect(next).toHaveBeenCalledOnce();
+      expect(status).not.toHaveBeenCalled();
+    });
+
+    it('a mesma assinatura e a do vetor (sign() sobre o path canonico)', () => {
+      expect(
+        sign(privkey_hex, {
+          method: c.input.method,
+          path: c.canonical_path,
+          uid: c.input.uid,
+          timestamp: c.input.timestamp,
+          body: Buffer.alloc(0),
+        }),
+      ).toBe(c.expected_signature_hex);
+    });
+  });
+
+  it('rejeita (401, sem crash) path diferente do assinado', () => {
+    const c = wireCases[0];
+    const mw = gatewayAuthMiddleware({
+      pubkeyHex: pubkey_hex,
+      mode: 'enforce',
+      now: () => c.input.timestamp,
+    });
+    const next = vi.fn();
+    const { res, status, json } = buildRes();
+    const p = '/relatorios/outro%20mes';
+    mw(
+      buildReq({
+        method: 'GET',
+        path: p,
+        url: p,
+        rawBody: Buffer.alloc(0),
+        headers: {
+          'x-gateway-user-id': c.input.uid,
+          'x-gateway-timestamp': String(c.input.timestamp),
+          'x-gateway-signature': c.expected_signature_hex,
+        },
+      }),
+      res,
+      next as NextFunction,
+    );
+    expect(next).not.toHaveBeenCalled();
+    expect(status).toHaveBeenCalledWith(401);
+    expect(json).toHaveBeenCalledWith({
+      error: 'invalid_gateway_signature',
+      reason: 'invalid_signature',
+    });
+  });
+
+  it('malformado sem assinatura: 401 em enforce, sem lancar', () => {
+    const mw = gatewayAuthMiddleware({ pubkeyHex: pubkey_hex, mode: 'enforce' });
+    const next = vi.fn();
+    const { res, status } = buildRes();
+    expect(() =>
+      mw(buildReq({ path: '/x%E0%A4%A', url: '/x%E0%A4%A' }), res, next as NextFunction),
+    ).not.toThrow();
+    expect(status).toHaveBeenCalledWith(401);
+  });
+
+  it('exemptPaths compara com o path decodado', () => {
+    const mw = gatewayAuthMiddleware({
+      pubkeyHex: pubkey_hex,
+      mode: 'enforce',
+      exemptPaths: ['/saude da app'],
+    });
+    const next = vi.fn();
+    const { res, status } = buildRes();
+    mw(
+      buildReq({ method: 'GET', path: '/saude%20da%20app', url: '/saude%20da%20app' }),
+      res,
+      next as NextFunction,
+    );
+    expect(next).toHaveBeenCalledOnce();
+    expect(status).not.toHaveBeenCalled();
+  });
+});
