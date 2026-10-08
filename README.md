@@ -190,6 +190,7 @@ Honest crypto: declarar explicitamente os limites evita uso indevido.
 | `v0.3.0` | Suporte a novos métodos (PATCH/DELETE com edge cases), Go ou Rust se demandado |
 | `v0.3.1` | Janela de skew configurável via env `GATEWAY_MAX_SKEW_S` (hosts sem NTP) |
 | `v0.4.0` | `service_authenticator` (principal de serviço para chamadas server-to-server) + `request.state.gateway_principal` |
+| `v0.4.1` | Node: `req.path` percent-encoded e decodado (`decodeCanonicalPath`) antes de verificar/comparar com `exemptPaths`, igual ao portal — corrige 401 em path com espaco/acento |
 
 ---
 

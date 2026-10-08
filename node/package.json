@@ -1,6 +1,6 @@
 {
   "name": "@grupohiperfarma/gateway-auth-node",
-  "version": "0.3.1",
+  "version": "0.4.1",
   "description": "Ed25519 signature library for Portal Gateway auth (Hiperfarma)",
   "license": "UNLICENSED",
   "private": true,

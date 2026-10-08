@@ -51,5 +51,77 @@
       "canonical_payload_hex": "5055540a2f72656c61746f72696f732f323032362d30350a390a313734383339303430320a7368613235363a65643437646136343564336364646631333034613162313662666631353466613363356137613431616638336337326538323564326530346339626632613536",
       "expected_signature_hex": "95683e2f98c205d22f735de259a1c034d37874c1b4c2b21413f0f01ff2b81abd0c8ff936979685cc69186822de4713b543e0c27e7cca39dff5898ef3f36e3b01"
     }
+  ],
+  "wire_path_cases": [
+    {
+      "name": "wire_space",
+      "description": "Espaco: %20 na fio, ' ' assinado.",
+      "wire_path": "/relatorios/mes%20atual",
+      "canonical_path": "/relatorios/mes atual",
+      "input": {
+        "method": "GET",
+        "path": "/relatorios/mes atual",
+        "uid": "42",
+        "timestamp": 1748390400,
+        "body_hex": ""
+      },
+      "expected_signature_hex": "7982b0481b5f0100d281699cab48e1e8270b932b3ba4b6bef6ec7e5dd0e5ab7f9dec98de465d4669bb8e6326f87c0e2ef0319d246089388b6f828cabee0ee807"
+    },
+    {
+      "name": "wire_accent",
+      "description": "Acento UTF-8: %C3%A7 na fio, 'c-cedilha' assinado.",
+      "wire_path": "/v1/a%C3%A7%C3%A3o",
+      "canonical_path": "/v1/ação",
+      "input": {
+        "method": "GET",
+        "path": "/v1/ação",
+        "uid": "42",
+        "timestamp": 1748390400,
+        "body_hex": ""
+      },
+      "expected_signature_hex": "2570ae632f697c69d3d799dbf0b9c76cd97c630549f46b6b876877d37b1454b88072790187915495449053aa347f3b6ef68bc2bbc4cef2980bdef9d6010c2d0e"
+    },
+    {
+      "name": "wire_slash",
+      "description": "%2F decodado para '/' (igual decodeURIComponent).",
+      "wire_path": "/v1/a%2Fb",
+      "canonical_path": "/v1/a/b",
+      "input": {
+        "method": "GET",
+        "path": "/v1/a/b",
+        "uid": "42",
+        "timestamp": 1748390400,
+        "body_hex": ""
+      },
+      "expected_signature_hex": "893a38c34bce2e3ccf1997ccc419b4674f077790871bd6d624d4b33129f6ea77da4d9166f2a9779b7f2f9855cbcb0705c642805a9047d7bb4f0291600a570202"
+    },
+    {
+      "name": "wire_percent",
+      "description": "%25 decodado para '%'.",
+      "wire_path": "/v1/desconto%2510",
+      "canonical_path": "/v1/desconto%10",
+      "input": {
+        "method": "GET",
+        "path": "/v1/desconto%10",
+        "uid": "42",
+        "timestamp": 1748390400,
+        "body_hex": ""
+      },
+      "expected_signature_hex": "eccf3819a6782ded10b31dbaa78003dd6f00eff89f144632236bceda7a2b25d2812844cd53a83093e398dc17fcce0f01108e2c8a098e05cf06b755e946f1670a"
+    },
+    {
+      "name": "wire_malformed",
+      "description": "Percent malformado: decode falha, path cru e assinado (fallback do portal).",
+      "wire_path": "/v1/x%E0%A4%A",
+      "canonical_path": "/v1/x%E0%A4%A",
+      "input": {
+        "method": "GET",
+        "path": "/v1/x%E0%A4%A",
+        "uid": "42",
+        "timestamp": 1748390400,
+        "body_hex": ""
+      },
+      "expected_signature_hex": "69bf7eea7abe68f94b0e152e2f5949fea1030b738d3c76ca59f4c72fc25aaf193698a05fcb287ef602453371554536575ad8818c9254eeb6687e0b4bdf360108"
+    }
   ]
 }

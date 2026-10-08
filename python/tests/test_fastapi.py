@@ -8,6 +8,7 @@ no real network is touched.
 from __future__ import annotations
 
 import json
+from pathlib import Path
 import logging
 import time
 
@@ -375,3 +376,34 @@ async def test_signature_still_works_with_authenticator_present():
         r = await ac.get("/whoami", headers=headers)
     assert r.status_code == 200
     assert r.json()["principal"] == {"kind": "user", "id": "7"}
+
+
+# --- Paridade de path percent-encoded com o portal / Node (fixtures cross-lang) ---
+
+def _wire_path_cases() -> list[dict]:
+    fixtures = json.loads(
+        (Path(__file__).resolve().parents[2] / "fixtures" / "vectors.json").read_text(encoding="utf-8")
+    )
+    return fixtures["wire_path_cases"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("case", [c for c in _wire_path_cases() if c["name"] != "wire_malformed"], ids=lambda c: c["name"])
+async def test_enforce_accepts_wire_encoded_path_signed_on_decoded(case):
+    """ASGI entrega scope['path'] decodado: a mesma assinatura do vetor (path
+    canonico) que o Node aceita com req.path encoded deve passar aqui."""
+    app = FastAPI()
+
+    @app.get("/{rest:path}")
+    async def any_path(rest: str):
+        return {"ok": True}
+
+    app.add_middleware(GatewayAuthMiddleware, pubkey_hex=TEST_PUBKEY, mode=AuthMode.ENFORCE, max_skew_seconds=10**9)
+    headers = {
+        "x-gateway-user-id": case["input"]["uid"],
+        "x-gateway-timestamp": str(case["input"]["timestamp"]),
+        "x-gateway-signature": case["expected_signature_hex"],
+    }
+    async with _client(app) as ac:
+        r = await ac.get(case["wire_path"], headers=headers)
+    assert r.status_code == 200, r.text

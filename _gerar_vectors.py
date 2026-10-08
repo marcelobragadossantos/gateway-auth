@@ -78,6 +78,38 @@ cases = [
     ),
 ]
 
+# Casos de path na FIO (percent-encoded, como o Express/ASGI recebem) -> path
+# CANONICO (decodado, o que o portal assina). Semantica do portal:
+# decodeURIComponent; se lancar (malformado), usa o path cru.
+from urllib.parse import unquote
+
+
+def decode_canonical(raw: str) -> str:
+    try:
+        return unquote(raw, errors="strict")
+    except UnicodeDecodeError:
+        return raw
+
+
+wire_path_cases = []
+for _name, _desc, _raw, _canon in [
+    ("wire_space", "Espaco: %20 na fio, ' ' assinado.", "/relatorios/mes%20atual", "/relatorios/mes atual"),
+    ("wire_accent", "Acento UTF-8: %C3%A7 na fio, 'c-cedilha' assinado.", "/v1/a%C3%A7%C3%A3o", "/v1/ação"),
+    ("wire_slash", "%2F decodado para '/' (igual decodeURIComponent).", "/v1/a%2Fb", "/v1/a/b"),
+    ("wire_percent", "%25 decodado para '%'.", "/v1/desconto%2510", "/v1/desconto%10"),
+    ("wire_malformed", "Percent malformado: decode falha, path cru e assinado (fallback do portal).", "/v1/x%E0%A4%A", "/v1/x%E0%A4%A"),
+]:
+    assert decode_canonical(_raw) == _canon, (_name, decode_canonical(_raw))
+    _c = make_case(name=_name, description=_desc, method="GET", path=_canon, uid="42", ts=1748390400, body=b"")
+    wire_path_cases.append({
+        "name": _name,
+        "description": _desc,
+        "wire_path": _raw,
+        "canonical_path": _canon,
+        "input": _c["input"],
+        "expected_signature_hex": _c["expected_signature_hex"],
+    })
+
 output = {
     "version": "1",
     "algorithm": "Ed25519",
@@ -89,6 +121,7 @@ output = {
     },
     "canonical_payload_format": "METHOD\\nPATH\\nUID\\nUNIX_TIMESTAMP_S\\nsha256:HEX_BODY_HASH",
     "cases": cases,
+    "wire_path_cases": wire_path_cases,
 }
 
 out_path = Path(__file__).parent / "fixtures" / "vectors.json"

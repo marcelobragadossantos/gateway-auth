@@ -24,7 +24,7 @@ export interface ExpressMiddlewareOptions {
   /** Custom logger (defaults to console). */
   logger?: MiddlewareLogger;
   /**
-   * Request paths exempt from validation in every mode (matched against
+   * Request paths exempt from validation in every mode (matched against the decoded
    * `req.path`). Health/liveness probes carry no signature; in enforce they
    * would 401 and crash-loop the container. Defaults to DEFAULT_EXEMPT_PATHS;
    * pass your own array to replace it.
@@ -127,7 +127,7 @@ function validateSignature(
   try {
     ok = verifyWithPubkey(ctx.pubkey, sigHex, {
       method: req.method,
-      path: req.path,
+      path: canonicalPath(req),
       uid,
       timestamp,
       body: req.rawBody,
@@ -143,6 +143,26 @@ function validateSignature(
     return { reason: 'invalid_signature' };
   }
   return null;
+}
+
+/**
+ * Path canonico = o que o portal ASSINA: `decodeURIComponent(path)`.
+ * `req.path` do Express vem percent-encoded (espaco -> %20, acento -> %C3..),
+ * entao sem decodar um back com espaco/acento no path tomaria 401.
+ * Espelha `decodeCanonicalPath` de portalgateway/src/helpers/gatewaySigner.js:
+ * se o decode lancar (URL malformada, ex.: `%E0%A4%A`), usa o path cru — o
+ * portal assina o cru nesse caso. Nunca lanca.
+ */
+export function decodeCanonicalPath(path: string): string {
+  try {
+    return decodeURIComponent(path);
+  } catch {
+    return path;
+  }
+}
+
+function canonicalPath(req: Request): string {
+  return decodeCanonicalPath(req.path);
 }
 
 export function gatewayAuthMiddleware(
@@ -194,7 +214,7 @@ export function gatewayAuthMiddleware(
 
     // Health/liveness paths bypass validation so unsigned orchestrator probes
     // don't 401 into a crash-loop.
-    if (exemptPaths.has(req.path)) {
+    if (exemptPaths.has(canonicalPath(req))) {
       next();
       return;
     }
@@ -208,7 +228,7 @@ export function gatewayAuthMiddleware(
 
     if (mode === 'warn') {
       logger.warn(`gateway signature invalid: ${failure.reason}`, {
-        path: req.path,
+        path: canonicalPath(req),
         method: req.method,
         ...failure.detail,
       });
