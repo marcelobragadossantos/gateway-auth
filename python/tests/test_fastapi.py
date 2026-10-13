@@ -407,3 +407,114 @@ async def test_enforce_accepts_wire_encoded_path_signed_on_decoded(case):
     async with _client(app) as ac:
         r = await ac.get(case["wire_path"], headers=headers)
     assert r.status_code == 200, r.text
+
+
+# --- Regressao v0.4.1: replay_receive nao pode fabricar http.disconnect ---
+
+def _build_stream_app(mode: AuthMode, file_path: Path) -> FastAPI:
+    from fastapi.responses import FileResponse, StreamingResponse
+
+    app = FastAPI()
+
+    @app.get("/file")
+    async def file_ep():
+        return FileResponse(str(file_path))
+
+    @app.get("/stream")
+    async def stream_ep():
+        async def gen():
+            import asyncio
+
+            for i in range(5):
+                await asyncio.sleep(0.01)
+                yield f"chunk-{i};".encode()
+        return StreamingResponse(gen())
+
+    @app.post("/disc")
+    async def disc_ep(request: Request):
+        await request.body()
+        return {"disconnected": await request.is_disconnected()}
+
+    app.add_middleware(GatewayAuthMiddleware, pubkey_hex=TEST_PUBKEY, mode=mode)
+    return app
+
+
+async def _call_asgi(app, method: str, path: str, body: bytes = b"", spec_version: str = "2.3"):
+    """Chama o app ASGI direto com um `receive` real que bloqueia ate o
+    disconnect verdadeiro (so liberado apos a resposta completar)."""
+    import asyncio
+
+    headers = _sign_request(method, path, "42", int(time.time()), body)
+    scope = {
+        "type": "http",
+        "asgi": {"version": "3.0", "spec_version": spec_version},
+        "http_version": "1.1",
+        "method": method,
+        "path": path,
+        "raw_path": path.encode(),
+        "query_string": b"",
+        "root_path": "",
+        "scheme": "http",
+        "server": ("testserver", 80),
+        "client": ("127.0.0.1", 1234),
+        "headers": [(k.encode(), v.encode()) for k, v in headers.items()],
+    }
+    real_disconnect = asyncio.Event()
+    sent_body = False
+
+    async def receive():
+        nonlocal sent_body
+        if not sent_body:
+            sent_body = True
+            return {"type": "http.request", "body": body, "more_body": False}
+        await real_disconnect.wait()
+        return {"type": "http.disconnect"}
+
+    messages: list[dict] = []
+    done = asyncio.Event()
+
+    async def send(message):
+        messages.append(message)
+        if message["type"] == "http.response.body" and not message.get("more_body", False):
+            done.set()
+
+    task = asyncio.create_task(app(scope, receive, send))
+    try:
+        await asyncio.wait_for(task, timeout=10)
+    finally:
+        real_disconnect.set()
+    status = next((m["status"] for m in messages if m["type"] == "http.response.start"), None)
+    out = b"".join(m.get("body", b"") for m in messages if m["type"] == "http.response.body")
+    return status, out, done.is_set()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", [AuthMode.WARN, AuthMode.ENFORCE])
+async def test_replay_file_response_complete_body(mode, tmp_path):
+    payload = bytes(range(256)) * 4096  # ~1 MB
+    f = tmp_path / "big.bin"
+    f.write_bytes(payload)
+    app = _build_stream_app(mode, f)
+    status, out, completed = await _call_asgi(app, "GET", "/file")
+    assert status == 200
+    assert completed
+    assert out == payload
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", [AuthMode.WARN, AuthMode.ENFORCE])
+async def test_replay_streaming_response_complete_body(mode, tmp_path):
+    app = _build_stream_app(mode, tmp_path / "unused")
+    status, out, completed = await _call_asgi(app, "GET", "/stream")
+    assert status == 200
+    assert completed
+    assert out == b"".join(f"chunk-{i};".encode() for i in range(5))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", [AuthMode.WARN, AuthMode.ENFORCE])
+async def test_replay_is_disconnected_false_after_body_read(mode, tmp_path):
+    app = _build_stream_app(mode, tmp_path / "unused")
+    status, out, _ = await _call_asgi(app, "POST", "/disc", body=b'{"a":1}')
+    assert status == 200
+    assert json.loads(out) == {"disconnected": False}

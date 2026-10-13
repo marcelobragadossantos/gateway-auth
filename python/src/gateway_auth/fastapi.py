@@ -90,16 +90,23 @@ async def _read_body(
 
 def _make_replay_receive(
     messages: list[dict],
+    real_receive: Callable[[], Awaitable[dict]],
 ) -> Callable[[], Awaitable[dict]]:
-    """Build an ASGI receive callable that replays the captured messages."""
+    """Build an ASGI receive callable that replays the captured messages.
+
+    After the replay is exhausted it delegates to the server's real
+    ``receive``, which blocks until the genuine ``http.disconnect`` (ASGI
+    contract). Fabricating an immediate disconnect makes FileResponse /
+    StreamingResponse abort the send (0-byte downloads).
+    """
     iterator = iter(messages)
 
     async def receive() -> dict:
         try:
             return next(iterator)
         except StopIteration:
-            # After replay, hang waiting for disconnect (matches ASGI contract).
-            return {"type": "http.disconnect"}
+            # After replay, block on the real receive until the true disconnect.
+            return await real_receive()
 
     return receive
 
@@ -293,7 +300,7 @@ class GatewayAuthMiddleware:
                 return
             await _send_413(send, reason)
             return
-        replay_receive = _make_replay_receive(captured)
+        replay_receive = _make_replay_receive(captured, receive)
 
         # Missing headers -> fail per mode
         if uid is None or ts_raw is None or sig is None:
