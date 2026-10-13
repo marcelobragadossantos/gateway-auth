@@ -225,7 +225,7 @@ Os testes em `tests/test_fastapi.py` cobrem os 3 modos (off/warn/enforce), prese
 
 ## Versao
 
-`0.4.0` — `service_authenticator` (principal de servico) + `request.state.gateway_principal`. Antes: `0.3.1` (janela de skew via env `GATEWAY_MAX_SKEW_S`). Roadmap completo no [README raiz](../README.md#roadmap).
+`0.4.1` — fix: `receive` de replay nao fabrica mais `http.disconnect` (downloads FileResponse/StreamingResponse saiam com 0 bytes em warn/enforce). Antes: `0.4.0` — `service_authenticator` (principal de servico) + `request.state.gateway_principal`. Antes: `0.3.1` (janela de skew via env `GATEWAY_MAX_SKEW_S`). Roadmap completo no [README raiz](../README.md#roadmap).
 
 ---
 
