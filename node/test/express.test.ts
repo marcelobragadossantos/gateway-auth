@@ -673,3 +673,61 @@ describe('gatewayAuthMiddleware - path percent-encoded (paridade com o portal)',
     expect(status).not.toHaveBeenCalled();
   });
 });
+
+describe('multi-pubkey (v0.5.0)', () => {
+  const body = Buffer.from('{}');
+  const genPub = async () => {
+    const ed = await import('@noble/ed25519');
+    const { sha512 } = await import('@noble/hashes/sha512');
+    (ed.etc as any).sha512Sync ??= (...m: Uint8Array[]) => sha512(ed.etc.concatBytes(...m));
+    const priv = ed.utils.randomPrivateKey();
+    const toHex = (u: Uint8Array) => Buffer.from(u).toString('hex');
+    return { priv: toHex(priv), pub: toHex(await ed.getPublicKeyAsync(priv)) };
+  };
+
+  function run(pubkeyHex: string, privHex: string, mode: 'enforce' | 'warn' = 'enforce') {
+    const ts = freshNow();
+    const sig = sign(privHex, { method: 'POST', path: '/v1/orders', uid: '1', timestamp: ts, body });
+    const req = buildReq({
+      headers: { 'x-gateway-user-id': '1', 'x-gateway-timestamp': String(ts), 'x-gateway-signature': sig },
+      rawBody: body,
+    });
+    const next = vi.fn();
+    const { res, status } = buildRes();
+    gatewayAuthMiddleware({ pubkeyHex, mode, now: freshNow })(req, res, next as NextFunction);
+    return { req: req as any, next, status };
+  }
+
+  it('single key still works and sets gatewayKeyId', () => {
+    const r = run(pubkey_hex, privkey_hex);
+    expect(r.next).toHaveBeenCalledOnce();
+    expect(r.req.gatewayKeyId).toBe(pubkey_hex.slice(0, 8));
+  });
+
+  it('accepts either of two keys; rejects unlisted', async () => {
+    const b = await genPub();
+    const x = await genPub();
+    const list = ` ${pubkey_hex} ,\n\n,${b.pub}`;
+    expect(run(list, privkey_hex).next).toHaveBeenCalledOnce();
+    const rb = run(list, b.priv);
+    expect(rb.next).toHaveBeenCalledOnce();
+    expect(rb.req.gatewayKeyId).toBe(b.pub.slice(0, 8));
+    const rx = run(list, x.priv);
+    expect(rx.next).not.toHaveBeenCalled();
+    expect(rx.status).toHaveBeenCalledWith(401);
+    const rw = run(list, x.priv, 'warn');
+    expect(rw.next).toHaveBeenCalledOnce();
+    expect(rw.req.gatewayKeyId).toBeUndefined();
+  });
+
+  it('malformed entry in list throws at boot naming position only', () => {
+    const bad = 'zz'.repeat(32);
+    expect(() => gatewayAuthMiddleware({ pubkeyHex: `${pubkey_hex},${bad}`, mode: 'enforce' }))
+      .toThrow(/entry 2 of 2/);
+    try {
+      gatewayAuthMiddleware({ pubkeyHex: `${pubkey_hex},${bad}`, mode: 'enforce' });
+    } catch (e) {
+      expect(String(e)).not.toContain(bad);
+    }
+  });
+});

@@ -8,7 +8,7 @@ Usage:
     app = FastAPI()
     app.add_middleware(
         GatewayAuthMiddleware,
-        pubkey_hex=os.environ["GATEWAY_SIGNING_PUBKEY"],
+        pubkey_hex=os.environ["GATEWAY_SIGNING_PUBKEY"],  # 1+ keys, comma-separated
         mode=AuthMode(os.environ.get("GATEWAY_AUTH_MODE", "off")),
     )
 """
@@ -23,7 +23,7 @@ import time
 from enum import Enum
 from typing import Awaitable, Callable, Iterable, Mapping, Optional
 
-from . import CanonicalInput, parse_pubkey, verify_with_pubkey
+from . import CanonicalInput, parse_pubkeys, verify_with_pubkey
 
 __all__ = ["AuthMode", "GatewayAuthMiddleware"]
 
@@ -232,11 +232,13 @@ class GatewayAuthMiddleware:
             else DEFAULT_EXEMPT_PATHS
         )
         self.logger = logger or logging.getLogger("gateway_auth")
-        # Parse pubkey once at startup; reused per request.
+        # Parse pubkey(s) once at startup; reused per request. pubkey_hex accepts
+        # one key or several separated by comma/whitespace (any of them may
+        # validate a signature). Malformed entry -> ValueError at boot.
         # In off mode pubkey_hex may be empty — defer parsing until needed.
-        self._pubkey = None
+        self._pubkeys: list = []
         if self.mode != AuthMode.OFF and self.pubkey_hex:
-            self._pubkey = parse_pubkey(self.pubkey_hex)
+            self._pubkeys = parse_pubkeys(self.pubkey_hex)
 
     async def __call__(self, scope, receive, send):
         # Only intercept HTTP; pass websocket/lifespan untouched.
@@ -378,11 +380,16 @@ class GatewayAuthMiddleware:
             timestamp=timestamp,
             body=body,
         )
-        try:
-            ok = verify_with_pubkey(self._pubkey, sig, inp) if self._pubkey else False
-        except ValueError:
-            # Malformed signature hex
-            ok = False
+        ok = False
+        key_id: Optional[str] = None
+        for kid, pk in self._pubkeys:
+            try:
+                if verify_with_pubkey(pk, sig, inp):
+                    ok, key_id = True, kid
+                    break
+            except ValueError:
+                # Malformed signature hex
+                break
 
         if not ok:
             reason = "invalid_signature"
@@ -403,4 +410,8 @@ class GatewayAuthMiddleware:
 
         # Valid: record the user principal and pass through with replayed body.
         _set_principal(scope, "user", uid)
+        # Audit: which trusted key validated (first 8 hex chars of the pubkey).
+        # Separate from the principal so its shape stays unchanged.
+        # Readable as `request.state.gateway_key_id`.
+        scope.setdefault("state", {})["gateway_key_id"] = key_id
         await self.app(scope, replay_receive, send)

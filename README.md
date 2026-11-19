@@ -78,12 +78,12 @@ python -c "from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519
 
 Distribuição:
 - **Gateway**: env `GATEWAY_SIGNING_PRIVKEY` (32 bytes hex, secret)
-- **Cada back**: env `GATEWAY_SIGNING_PUBKEY` (32 bytes hex, **não é secret**)
+- **Cada back**: env `GATEWAY_SIGNING_PUBKEY` (32 bytes hex, **não é secret**). Desde v0.5.0 aceita **N pubkeys** separadas por vírgula (espaço/quebra de linha/itens vazios são ignorados), ex.: `<pub_portal>,<pub_mcp>`; assinatura válida em QUALQUER uma passa. 1 chave = comportamento idêntico ao anterior. Entrada malformada/duplicada falha no boot (a mensagem cita só a posição). Auditoria: Python `request.state.gateway_key_id` / Node `req.gatewayKeyId` = 8 primeiros hex da pubkey que validou (o principal não muda).
 
 ### Rotação
 
 1. Gateway gera novo par
-2. Backs aceitam **as duas pubkeys** por um período (env `GATEWAY_SIGNING_PUBKEY_NEXT` opcional, validar com qualquer das duas)
+2. Backs aceitam **as duas pubkeys** por um período (a mesma env `GATEWAY_SIGNING_PUBKEY` aceita várias pubkeys separadas por vírgula; validar com qualquer uma)
 3. Gateway começa a assinar com a nova
 4. Backs removem a antiga depois de janela de overlap
 
