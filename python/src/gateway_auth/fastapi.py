@@ -239,6 +239,9 @@ class GatewayAuthMiddleware:
         self._pubkeys: list = []
         if self.mode != AuthMode.OFF and self.pubkey_hex:
             self._pubkeys = parse_pubkeys(self.pubkey_hex)
+            if not self._pubkeys:
+                # Only separators/whitespace: would 401 everything silently.
+                raise ValueError("GATEWAY_SIGNING_PUBKEY has no valid key")
 
     async def __call__(self, scope, receive, send):
         # Only intercept HTTP; pass websocket/lifespan untouched.

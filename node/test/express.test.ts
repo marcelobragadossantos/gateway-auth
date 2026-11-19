@@ -731,3 +731,9 @@ describe('multi-pubkey (v0.5.0)', () => {
     }
   });
 });
+
+describe('pubkeyHex only separators', () => {
+  it.each([' , ', ',', '   '])('throws for %j', (v) => {
+    expect(() => gatewayAuthMiddleware({ pubkeyHex: v, mode: 'enforce' })).toThrow(/required/);
+  });
+});

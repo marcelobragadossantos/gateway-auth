@@ -114,3 +114,10 @@ def test_duplicate_key_fails_at_boot():
 
 def test_off_mode_does_not_parse_keys():
     GatewayAuthMiddleware(None, pubkey_hex="garbage", mode=AuthMode.OFF)
+
+
+@pytest.mark.parametrize("value", [" , ", ",", "   "])
+@pytest.mark.parametrize("mode", [AuthMode.WARN, AuthMode.ENFORCE])
+def test_separators_only_fails_at_boot(value, mode):
+    with pytest.raises(ValueError, match="has no valid key"):
+        GatewayAuthMiddleware(None, pubkey_hex=value, mode=mode)
