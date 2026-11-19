@@ -16,6 +16,7 @@ Signature: Ed25519, 64 bytes, encoded como hex lowercase (128 chars).
 from __future__ import annotations
 
 import hashlib
+import re
 from dataclasses import dataclass
 
 from cryptography.exceptions import InvalidSignature as _CryptoInvalidSignature
@@ -30,13 +31,15 @@ __all__ = [
     "sign",
     "verify",
     "parse_pubkey",
+    "parse_pubkeys",
+    "pubkey_id",
     "verify_with_pubkey",
     "InvalidSignature",
     "MissingRawBody",
     "TimestampOutOfWindow",
 ]
 
-__version__ = "0.4.0"
+__version__ = "0.5.0"
 
 
 # ---------------------------------------------------------------------------
@@ -152,6 +155,41 @@ def parse_pubkey(pubkey_hex: str) -> Ed25519PublicKey:
         ValueError: if hex is malformed or not 32 bytes.
     """
     return _pubkey_from_hex(pubkey_hex)
+
+
+def pubkey_id(pubkey_hex: str) -> str:
+    """Short, non-secret key id: first 8 hex chars of the (lowercased) pubkey."""
+    return pubkey_hex.strip().lower()[:8]
+
+
+def parse_pubkeys(value: str) -> "list[tuple[str, Ed25519PublicKey]]":
+    """Parse one or more Ed25519 public keys from a separated string.
+
+    Separators: comma, whitespace or newline; empty items are ignored.
+    A single key (no separator) behaves exactly like :func:`parse_pubkey`.
+    Returns a list of ``(key_id, pubkey)`` in the given order.
+
+    Raises:
+        ValueError: if any entry is malformed (message names the 1-based
+            position only, never the key material) or duplicated.
+    """
+    items = [x for x in re.split(r"[,\s]+", value or "") if x]
+    out: list = []
+    seen: set = set()
+    for i, item in enumerate(items, start=1):
+        try:
+            key = _pubkey_from_hex(item)
+        except ValueError as exc:
+            raise ValueError(
+                f"invalid Ed25519 public key at position {i} of {len(items)} "
+                f"(expected 64 hex chars): {type(exc).__name__}"
+            ) from None
+        kid = pubkey_id(item)
+        if item.lower() in seen:
+            raise ValueError(f"duplicate Ed25519 public key at position {i}")
+        seen.add(item.lower())
+        out.append((kid, key))
+    return out
 
 
 def verify_with_pubkey(

@@ -15,7 +15,11 @@ export interface MiddlewareLogger {
 }
 
 export interface ExpressMiddlewareOptions {
-  /** Gateway public key, 32 bytes hex lowercase. Not a secret. */
+  /**
+   * Gateway public key(s): 32 bytes hex each. Not a secret. Accepts several
+   * separated by comma/whitespace; a signature valid for ANY of them passes.
+   * The validating key id (first 8 hex chars) is set as `req.gatewayKeyId`.
+   */
   pubkeyHex: string;
   /** off | warn | enforce. */
   mode: AuthMode;
@@ -55,6 +59,7 @@ function envMaxSkewSeconds(): number | undefined {
 
 interface RequestWithRawBody extends Request {
   rawBody?: Buffer;
+  gatewayKeyId?: string;
 }
 
 function defaultLogger(): MiddlewareLogger {
@@ -74,11 +79,12 @@ function readHeader(req: Request, name: string): string | undefined {
 
 interface ValidationFailure {
   reason: string;
+  keyId?: string;
   detail?: object;
 }
 
 interface ValidationContext {
-  pubkey: Uint8Array;
+  pubkeys: Array<{ id: string; key: Uint8Array }>;
   maxSkewSeconds: number;
   now: () => number;
 }
@@ -123,15 +129,21 @@ function validateSignature(
     };
   }
 
-  let ok = false;
+  let validKeyId: string | undefined;
   try {
-    ok = verifyWithPubkey(ctx.pubkey, sigHex, {
+    const input = {
       method: req.method,
       path: canonicalPath(req),
       uid,
       timestamp,
       body: req.rawBody,
-    });
+    };
+    for (const { id, key } of ctx.pubkeys) {
+      if (verifyWithPubkey(key, sigHex, input)) {
+        validKeyId = id;
+        break;
+      }
+    }
   } catch (err) {
     if (err instanceof GatewayAuthError) {
       return { reason: err.code, detail: { message: err.message } };
@@ -139,9 +151,10 @@ function validateSignature(
     throw err;
   }
 
-  if (!ok) {
+  if (validKeyId === undefined) {
     return { reason: 'invalid_signature' };
   }
+  req.gatewayKeyId = validKeyId;
   return null;
 }
 
@@ -177,25 +190,34 @@ export function gatewayAuthMiddleware(
       `gatewayAuthMiddleware: invalid mode '${mode}' (expected off|warn|enforce)`,
     );
   }
-  let parsedPubkey: Uint8Array;
+  let parsedPubkeys: Array<{ id: string; key: Uint8Array }> = [];
   if (mode !== 'off') {
     if (!opts.pubkeyHex || typeof opts.pubkeyHex !== 'string') {
       throw new Error('gatewayAuthMiddleware: pubkeyHex is required for warn|enforce');
     }
-    if (!/^[0-9a-f]{64}$/i.test(opts.pubkeyHex)) {
-      throw new Error(
-        'gatewayAuthMiddleware: pubkeyHex must be 64 hex chars (32-byte Ed25519 public key)',
-      );
+    const items = opts.pubkeyHex.split(/[,\s]+/).filter((x) => x.length > 0);
+    if (items.length === 0) {
+      throw new Error('gatewayAuthMiddleware: pubkeyHex is required for warn|enforce');
     }
-    // Parse once at startup; reused per request (avoids re-parsing hex on every verify).
-    parsedPubkey = parsePubkey(opts.pubkeyHex);
-  } else {
-    // Off mode never reaches validateSignature; placeholder bytes are fine.
-    parsedPubkey = new Uint8Array(32);
+    const seen = new Set<string>();
+    items.forEach((item, i) => {
+      if (!/^[0-9a-f]{64}$/i.test(item)) {
+        throw new Error(
+          `gatewayAuthMiddleware: pubkeyHex entry ${i + 1} of ${items.length} must be 64 hex chars (32-byte Ed25519 public key)`,
+        );
+      }
+      const lower = item.toLowerCase();
+      if (seen.has(lower)) {
+        throw new Error(`gatewayAuthMiddleware: duplicate pubkeyHex entry ${i + 1}`);
+      }
+      seen.add(lower);
+      // Parse once at startup; reused per request.
+      parsedPubkeys.push({ id: lower.slice(0, 8), key: parsePubkey(item) });
+    });
   }
 
   const ctx: ValidationContext = {
-    pubkey: parsedPubkey,
+    pubkeys: parsedPubkeys,
     maxSkewSeconds: opts.maxSkewSeconds ?? envMaxSkewSeconds() ?? 60,
     now: opts.now ?? (() => Math.floor(Date.now() / 1000)),
   };
